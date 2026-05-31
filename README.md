@@ -50,7 +50,7 @@ src/
 
 - **Webcam positioning is mandatory:** every test runs behind the camera gate (`TestGate`), so there is no manual screen-distance setup on the home page. The camera is shown fullscreen while you position yourself, collapses to a small bottom-left picture-in-picture once you're in position, and returns to fullscreen if you leave position.
 - **Calibration:** letter size for Snellen is computed from visual angle (5 arc-minutes). The px/mm screen scale uses a sensible default (`useCalibration.js`); the webcam supplies the viewing distance.
-- **Hash history:** `createWebHashHistory` is used so static hosting (GitHub Pages) needs no server-side routing.
+- **Hash history:** `createWebHashHistory` is used so static hosting (Cloudflare Pages) needs no server-side routing.
 - **Eager route import:** the app is small, so a single bundle is faster than lazy chunks; it also avoids the async-component + `<Transition>` race condition.
 - **Minimal dependencies:** the only runtime dependencies are `vue` and `vue-router`. MediaPipe is not part of the bundle — it is lazy-loaded from a CDN. Styling is plain scoped CSS.
 
@@ -71,11 +71,15 @@ npm run format       # format with Prettier
 - `.github/workflows/ci.yml`: runs `npm run lint` + `npm run build` on every PR and push to `main`.
 - **Dependabot** (`.github/dependabot.yml`): scans npm and GitHub Actions dependencies weekly. `dependabot-auto-merge.yml` auto-merges minor/patch updates once CI passes (majors are manual). For this to work, **Settings → General → Allow auto-merge** must be enabled in the repo settings.
 
-## Deploying to GitHub Pages
+## Deploying to Cloudflare Pages
 
-Because `vite.config.js` sets `base: './'`, the output runs directly on a project page (`user.github.io/repo/`).
+Because `vite.config.js` sets `base: './'` and the router uses hash history, the build runs on any static host with no server-side routing.
 
-This repo includes `.github/workflows/deploy.yml`: on push to `main` it automatically builds and publishes to GitHub Pages. Just select **Settings → Pages → Source: GitHub Actions** in the repo settings.
+This repo includes `.github/workflows/deploy.yml`: on push to `main` it builds and publishes to Cloudflare Pages (project `eyeq`) via `wrangler pages deploy`. Set up once:
+
+1. Create a Cloudflare API token (**My Profile → API Tokens**) with the **Cloudflare Pages: Edit** permission, and note your **Account ID** (Workers & Pages → Overview).
+2. In the GitHub repo, add them as secrets (**Settings → Secrets and variables → Actions**): `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`.
+3. Push to `main` — the first deploy auto-creates the `eyeq` Pages project and serves it at `https://eyeq.pages.dev`.
 
 ## License
 
