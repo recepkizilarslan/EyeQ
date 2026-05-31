@@ -32,11 +32,13 @@ const {
   muted,
   toggleMute,
   ttsSupported,
+  ttsReady,
   recognitionSupported,
   startListening,
   stopListening,
   listening,
   lastHeard,
+  recogError,
 } = useSpeech()
 
 const phase = ref('positioning') // positioning | testing
@@ -94,11 +96,12 @@ function onGuide(key) {
 }
 
 // ── Voice ──────────────────────────────────────────────────────────────────
-// The user can speak the answer instead of gesturing: a number (Ishihara), a
-// letter (Snellen/Contrast) or yes/no (Amsler). Recognition runs only while
-// answering is open; matching returns true/false to answer, or undefined to
-// keep listening (so background noise never triggers a false answer). TTS reads
-// the prompt aloud on each new stimulus and announces position/cover issues.
+// The user speaks the answer: a number (Ishihara), a letter (Snellen/Contrast)
+// or yes/no (Amsler). Recognition runs only while answering is open. For
+// number/letter modes ANY recognized value is a valid answer and advances the
+// test (correct if it equals the stimulus, wrong otherwise); only a wholly
+// unintelligible utterance is ignored. TTS reads the prompt aloud on each new
+// stimulus and announces position/cover issues.
 
 const NEG = [
   'hayır', 'görmedim', 'göremiyorum', 'yok', 'okuyamıyorum', 'hiçbir şey', 'bir şey yok',
@@ -108,19 +111,28 @@ const POS = [
   'evet', 'gördüm', 'görüyorum', 'okuyabiliyorum', 'var',
   'yes', 'yeah', 'yep', 'i can', 'i see', 'seen', 'readable',
 ]
+// Generous homophone lists per letter — Turkish letter names ("ce", "de", …)
+// and English ones plus common mis-transcriptions — since single letters are
+// the hardest thing for speech-to-text to get exactly right.
 const LETTER_ALIAS = {
-  C: ['c', 'ce', 'see', 'sea', 'si'],
-  D: ['d', 'de', 'dee'],
-  E: ['e', 'ee', 'i'],
-  F: ['f', 'fe', 'ef', 'eff'],
+  C: ['c', 'ce', 'se', 'see', 'sea', 'si', 'cee'],
+  D: ['d', 'de', 'dee', 'di'],
+  E: ['e', 'ee', 'i', 'ie'],
+  F: ['f', 'fe', 'ef', 'eff', 'efe'],
   L: ['l', 'le', 'el', 'ell'],
-  O: ['o', 'oh', 'zero'],
-  P: ['p', 'pe', 'pee'],
-  T: ['t', 'te', 'tee'],
-  Z: ['z', 'ze', 'zet', 'zee', 'zed'],
-  H: ['h', 'he', 'aitch', 'ache'],
-  N: ['n', 'ne', 'en', 'an'],
-  R: ['r', 're', 'are', 'ar'],
+  O: ['o', 'oh', 'ow', 'zero'],
+  P: ['p', 'pe', 'pee', 'pi'],
+  T: ['t', 'te', 'tee', 'ti'],
+  Z: ['z', 'ze', 'zet', 'zee', 'zed', 'zeta'],
+  H: ['h', 'he', 'ha', 'haş', 'aitch', 'ache'],
+  N: ['n', 'ne', 'en', 'an', 'na'],
+  R: ['r', 're', 'ar', 'are', 'er'],
+}
+// Reverse lookup: any spoken token -> the letter it stands for. Lets us detect
+// which letter the user said, even when it's the WRONG one.
+const LETTER_FROM_TOKEN = {}
+for (const [letter, aliases] of Object.entries(LETTER_ALIAS)) {
+  for (const a of aliases) if (!(a in LETTER_FROM_TOKEN)) LETTER_FROM_TOKEN[a] = letter
 }
 
 function numWords(n, l) {
@@ -145,6 +157,29 @@ function isNeg(norm) {
   return NEG.some((w) => norm.includes(w))
 }
 
+// Which number did the user say? Digits win; otherwise scan spelled-out forms
+// (longest first so "yirmi dokuz" beats "yirmi"). Returns a string or null.
+function spokenNumber(text) {
+  const padded = ' ' + text.toLowerCase().replace(/\s+/g, ' ').trim() + ' '
+  const dm = padded.match(/\d+/)
+  if (dm) return dm[0]
+  const entries = []
+  for (let n = 0; n <= 99; n++) {
+    for (const w of [...numWords(n, 'tr'), ...numWords(n, 'en')]) entries.push({ n: String(n), w })
+  }
+  entries.sort((a, b) => b.w.length - a.w.length)
+  for (const e of entries) if (padded.includes(' ' + e.w + ' ')) return e.n
+  return null
+}
+
+// Which letter did the user say? First recognized token wins. Returns the
+// uppercase letter or null.
+function spokenLetter(text) {
+  const tokens = text.toLowerCase().split(/[\s,.;]+/).filter(Boolean)
+  for (const tok of tokens) if (LETTER_FROM_TOKEN[tok]) return LETTER_FROM_TOKEN[tok]
+  return null
+}
+
 function matchYesNo(text) {
   const norm = text.toLowerCase().trim()
   if (isNeg(norm)) return false
@@ -152,23 +187,24 @@ function matchYesNo(text) {
   return undefined
 }
 
+// For number/letter modes: ANY recognized number/letter is a valid answer and
+// advances the test — correct (true) if it equals the expected stimulus, wrong
+// (false) otherwise. Only a totally unintelligible utterance is ignored
+// (undefined → keep listening). A negative ("göremiyorum") is a wrong answer.
 function matchNumber(text, expected) {
   const norm = text.toLowerCase().trim()
   if (isNeg(norm)) return false
-  if (norm.replace(/\s+/g, '').includes(String(expected))) return true
-  const forms = [...numWords(Number(expected), 'tr'), ...numWords(Number(expected), 'en')]
-  const padded = ' ' + norm.replace(/\s+/g, ' ') + ' '
-  if (forms.some((w) => padded.includes(' ' + w + ' '))) return true
-  return undefined
+  const said = spokenNumber(text)
+  if (said == null) return undefined
+  return said === String(expected)
 }
 
 function matchLetter(text, expected) {
   const norm = text.toLowerCase().trim()
   if (isNeg(norm)) return false
-  const aliases = LETTER_ALIAS[String(expected).toUpperCase()] || [String(expected).toLowerCase()]
-  const tokens = norm.split(/[\s,.;]+/).filter(Boolean)
-  if (tokens.some((tok) => aliases.includes(tok))) return true
-  return undefined
+  const said = spokenLetter(text)
+  if (said == null) return undefined
+  return said === String(expected).toUpperCase()
 }
 
 function matchSpeech(text) {
@@ -177,25 +213,41 @@ function matchSpeech(text) {
   return matchYesNo(text)
 }
 
-// Interim results fire repeatedly for one utterance; this cooldown stops a
-// single spoken answer from registering twice (and skipping a stimulus).
+// Interim results fire many times for one spoken word; we de-duplicate by the
+// matched transcript so the lingering repeats of the same utterance don't
+// register twice — while a genuinely different word is accepted immediately, so
+// fast answers are never dropped.
 let lastVoiceAnswer = 0
+let lastMatchText = ''
+function resetVoiceDedup() {
+  lastVoiceAnswer = 0
+  lastMatchText = ''
+}
 function handleHeard(alts) {
   if (!answering.value) return
-  if (performance.now() - lastVoiceAnswer < 1500) return
   let res
+  let matchText = ''
   for (const a of alts) {
     const m = matchSpeech(a)
     if (m === true) {
       res = true
+      matchText = a
       break
     }
-    if (m === false && res === undefined) res = false
+    if (m === false && res === undefined) {
+      res = false
+      matchText = a
+    }
   }
-  if (res === true || res === false) {
-    lastVoiceAnswer = performance.now()
-    answer(res)
-  }
+  if (res === undefined) return
+  const norm = matchText.toLowerCase().trim()
+  const now = performance.now()
+  // Same word still being finalized → ignore. Different word → take it.
+  if (norm && norm === lastMatchText && now - lastVoiceAnswer < 2000) return
+  if (now - lastVoiceAnswer < 350) return // guard rapid interim flips
+  lastVoiceAnswer = now
+  lastMatchText = norm
+  answer(res)
 }
 
 const promptText = computed(() => {
@@ -210,6 +262,7 @@ function speakPrompt() {
 
 watch(answering, (on) => {
   if (on) {
+    resetVoiceDedup() // new window — accept the first answer immediately
     if (recognitionSupported) startListening(handleHeard)
     speakPrompt()
   } else if (recognitionSupported) {
@@ -217,9 +270,12 @@ watch(answering, (on) => {
   }
 })
 // Re-prompt aloud when the stimulus changes mid-test (next letter/plate).
+// Also clear the dedup memory: the previous item's answer must not block an
+// identical spoken answer on the new item (e.g. two plates both read "5").
 watch(
   () => props.expected,
   () => {
+    resetVoiceDedup()
     if (answering.value) speakPrompt()
   },
 )
@@ -234,6 +290,42 @@ watch(covered, (v, prev) => {
   if (v && !prev && props.coverEye) beep('ok')
 })
 
+// Human-readable voice status shown in the test field so a silent failure
+// (denied mic, no network for the speech service) is visible, not a mystery.
+const voiceStatus = computed(() => {
+  if (!recognitionSupported) return ''
+  const err = recogError.value
+  if (err === 'not-allowed' || err === 'service-not-allowed') return t('vMicDenied')
+  if (err === 'network') return t('vMicNetwork')
+  if (listening.value) return t('vListening')
+  return t('vMicStarting')
+})
+
+// Watchdog: while answering is open the recognizer must be listening. If it
+// quietly stopped (and the error isn't a fatal permission denial), restart it.
+let watchdog = null
+watch(
+  answering,
+  (on) => {
+    if (on && !watchdog) {
+      watchdog = setInterval(() => {
+        if (
+          answering.value &&
+          recognitionSupported &&
+          !listening.value &&
+          recogError.value !== 'not-allowed' &&
+          recogError.value !== 'service-not-allowed'
+        ) {
+          startListening(handleHeard)
+        }
+      }, 1500)
+    } else if (!on && watchdog) {
+      clearInterval(watchdog)
+      watchdog = null
+    }
+  },
+)
+
 // Spoken intro on entering positioning: announce the target distance.
 function speakIntro() {
   speak(`${t('vSit')} ${props.targetCm} ${t('vCm')}.`)
@@ -242,7 +334,10 @@ onMounted(() => {
   if (phase.value === 'positioning') speakIntro()
 })
 
-onUnmounted(stopListening)
+onUnmounted(() => {
+  stopListening()
+  if (watchdog) clearInterval(watchdog)
+})
 </script>
 
 <template>
@@ -256,9 +351,10 @@ onUnmounted(stopListening)
         <span
           v-if="recognitionSupported && answering"
           class="mic"
-          :class="{ on: listening }"
-        >🎤 <span v-if="listening">{{ t('vListening') }}</span></span>
+          :class="{ on: listening, err: !!recogError && recogError !== 'no-speech' }"
+        >🎤 <span>{{ voiceStatus }}</span></span>
         <span v-if="recognitionSupported && lastHeard" class="heard">“{{ lastHeard }}”</span>
+        <span v-if="ttsSupported && !ttsReady" class="tts-warn">⚠️ {{ t('vNoVoiceOutput') }}</span>
       </div>
 
       <div class="test-body">
@@ -380,6 +476,9 @@ onUnmounted(stopListening)
 .mic.on {
   color: #1a8f4c;
 }
+.mic.err {
+  color: #c0392b;
+}
 .mic.on::before {
   content: '';
   width: 8px;
@@ -408,6 +507,11 @@ onUnmounted(stopListening)
 }
 .no-voice {
   color: #b06a00;
+}
+.tts-warn {
+  font-size: 0.8rem;
+  color: #b06a00;
+  max-width: 240px;
 }
 
 .cam-layer.fs {
