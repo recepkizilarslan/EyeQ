@@ -9,8 +9,10 @@ const props = defineProps({
   holdMs: { type: Number, default: 1500 },
   graceMs: { type: Number, default: 1500 },
   compact: { type: Boolean, default: false },
+  fullscreen: { type: Boolean, default: false },
+  coverEye: { type: String, default: '' }, // '' | 'left' | 'right' — eye that must be covered
 })
-const emit = defineEmits(['locked', 'lost', 'regained'])
+const emit = defineEmits(['locked', 'lost', 'regained', 'cover', 'guide'])
 
 const { t } = useI18n()
 const tracker = useFaceTracker()
@@ -20,9 +22,49 @@ const {
   faceDetected,
   distanceCm,
   eyes,
+  handBoxes,
   centered,
   focalCalibrated,
 } = tracker
+
+// The hand model (which also yields the hand bounding boxes) is only needed
+// when a specific eye must be covered — answering is fully by voice now.
+const needsHands = computed(() => !!props.coverEye)
+
+const COVER_PAD = 0.04 // tolerance (frame fraction) around a hand box when testing overlap
+
+// Whether the eye the test asked the user to cover is physically covered by a
+// hand — confirmed by the hand's bounding box overlapping that eye's position.
+// No coverEye requirement -> always satisfied.
+const coverSatisfied = computed(() => {
+  if (!props.coverEye) return true
+  const e = eyes.value
+  if (!e) return false
+  const eye = props.coverEye === 'right' ? e.r : e.l
+  return (handBoxes.value || []).some(
+    (b) =>
+      eye.x >= b.xMin - COVER_PAD &&
+      eye.x <= b.xMax + COVER_PAD &&
+      eye.y >= b.yMin - COVER_PAD &&
+      eye.y <= b.yMax + COVER_PAD,
+  )
+})
+
+watch(coverSatisfied, (v) => emit('cover', v), { immediate: true })
+
+// Hand bounding boxes mapped to mirrored display coords (video is shown flipped).
+const handBoxesDisplay = computed(() =>
+  (handBoxes.value || []).map((b) => ({
+    hand: b.hand,
+    label: b.hand === 'right' ? t('handRight') : b.hand === 'left' ? t('handLeft') : '',
+    style: {
+      left: (1 - b.xMax) * 100 + '%',
+      top: b.yMin * 100 + '%',
+      width: (b.xMax - b.xMin) * 100 + '%',
+      height: (b.yMax - b.yMin) * 100 + '%',
+    },
+  })),
+)
 
 const videoRef = ref(null)
 const locked = ref(false)
@@ -53,6 +95,18 @@ const hint = computed(() => {
   if (!locked.value) return t('camHold')
   return t('camInPosition')
 })
+
+// A stable key for the current positioning instruction, emitted on change so the
+// parent can read it aloud. 'inpos' once locked & holding position (nothing to say).
+const guideKey = computed(() => {
+  if (locked.value && !lost.value) return 'inpos'
+  if (!faceDetected.value) return 'noface'
+  if (!centered.value || distanceCm.value == null) return 'center'
+  if (distanceCm.value > props.targetCm + props.toleranceCm) return 'closer'
+  if (distanceCm.value < props.targetCm - props.toleranceCm) return 'back'
+  return 'hold'
+})
+watch(guideKey, (k) => emit('guide', k))
 
 function evaluate() {
   const now = performance.now()
@@ -110,6 +164,30 @@ watch(status, (s) => {
   }
 })
 
+// Load / unload the hand model when an eye-cover check is needed. It supplies the
+// hand bounding boxes we use to confirm the hand is physically over the eye.
+watch(needsHands, async (on) => {
+  if (on && status.value === 'ready') {
+    try {
+      await tracker.enableGestures()
+    } catch {
+      /* hand model failed to load; the cover check just stays unconfirmed */
+    }
+  } else if (!on) {
+    tracker.disableGestures()
+  }
+})
+// If the camera becomes ready after a cover requirement is already set, load now.
+watch(status, async (s) => {
+  if (s === 'ready' && needsHands.value) {
+    try {
+      await tracker.enableGestures()
+    } catch {
+      /* hand model failed to load; the cover check just stays unconfirmed */
+    }
+  }
+})
+
 // ---- one-time focal calibration sub-flow ----
 const showCalib = ref(false)
 const calibInput = ref('')
@@ -129,33 +207,45 @@ function doCalibrate() {
 const countdownSec = computed(() => Math.ceil(holdRemaining.value / 1000))
 
 // One box per eye. Coords are original (unmirrored); the video is shown
-// mirrored, so displayed x is (1 - x) and the box with the larger displayed x
-// sits on the screen's right = the user's right eye (mirror view).
+// mirrored, so displayed x is (1 - x). LEFT_IRIS (e.l) is the subject's left
+// eye, which in the mirrored view sits on the screen's left — so anatomy and
+// what the user sees agree: e.l -> "Left", e.r -> "Right".
 const eyeBoxes = computed(() => {
   const e = eyes.value
   if (!e) return null
   const w = e.ipd * 0.95
   const h = e.ipd * 0.6
-  const mk = (pt, label) => ({
-    label,
-    style: {
-      left: (1 - pt.x) * 100 + '%',
-      top: pt.y * 100 + '%',
-      width: w * 100 + '%',
-      height: h * 100 + '%',
-    },
-  })
-  const lDisp = 1 - e.l.x
-  const rDisp = 1 - e.r.x
-  return [
-    mk(e.l, lDisp >= rDisp ? t('eyeRight') : t('eyeLeft')),
-    mk(e.r, rDisp > lDisp ? t('eyeRight') : t('eyeLeft')),
-  ]
+  const mk = (pt, subject) => {
+    const required = !!props.coverEye && props.coverEye === (subject === 'r' ? 'right' : 'left')
+    return {
+      label: subject === 'r' ? t('eyeRight') : t('eyeLeft'),
+      subject,
+      required,
+      style: {
+        left: (1 - pt.x) * 100 + '%',
+        top: pt.y * 100 + '%',
+        width: w * 100 + '%',
+        height: h * 100 + '%',
+      },
+    }
+  }
+  return [mk(e.l, 'l'), mk(e.r, 'r')]
 })
+
+// Border color for an eye box. With a cover requirement the relevant eye turns
+// green when a hand is over it, red while it still needs covering; the other eye
+// dims. Without a requirement, both follow the distance status.
+function eyeBoxClass(box) {
+  if (props.coverEye) {
+    if (!box.required) return 'idle'
+    return coverSatisfied.value ? 'ok' : 'bad'
+  }
+  return distOk.value ? 'ok' : 'bad'
+}
 </script>
 
 <template>
-  <div class="cam" :class="{ compact }">
+  <div class="cam" :class="{ compact, fullscreen }">
     <!-- video element stays mounted (v-show) so it exists when we attach the stream -->
     <div class="frame" :class="ringState" v-show="status === 'loading' || status === 'ready'">
       <video ref="videoRef" class="vid" playsinline muted></video>
@@ -165,14 +255,30 @@ const eyeBoxes = computed(() => {
           v-for="(box, i) in eyeBoxes"
           :key="i"
           class="eye-box"
-          :class="distOk ? 'ok' : 'bad'"
+          :class="eyeBoxClass(box)"
           :style="box.style"
         >
           <span class="corner tl"></span>
           <span class="corner tr"></span>
           <span class="corner bl"></span>
           <span class="corner br"></span>
-          <span class="eye-label">{{ box.label }}</span>
+          <span class="eye-label">
+            <template v-if="box.required">{{ coverSatisfied ? '✓' : '🖐' }} </template>{{ box.label }}
+          </span>
+        </div>
+
+        <!-- detected hand frame(s) -->
+        <div
+          v-for="(hb, i) in handBoxesDisplay"
+          :key="'hand' + i"
+          class="hand-box"
+          :style="hb.style"
+        >
+          <span class="corner tl"></span>
+          <span class="corner tr"></span>
+          <span class="corner bl"></span>
+          <span class="corner br"></span>
+          <span class="eye-label">{{ hb.label }}</span>
         </div>
         <div v-if="!locked && inPosition" class="count">{{ countdownSec }}</div>
       </div>
@@ -202,8 +308,8 @@ const eyeBoxes = computed(() => {
       <button class="btn btn-ghost" @click="retry">{{ t('camRetry') }}</button>
     </div>
 
-    <!-- live readout -->
-    <div v-else-if="status === 'ready'" class="panel">
+    <!-- live readout (hidden in the corner PiP; the frame border conveys status) -->
+    <div v-else-if="status === 'ready' && !compact" class="panel">
       <div class="readout">
         <span class="dist" :class="ringState">
           {{ distanceCm != null ? distanceCm : '–' }}<small> cm</small>
@@ -251,7 +357,32 @@ const eyeBoxes = computed(() => {
   border-radius: 16px; overflow: hidden; border: 3px solid var(--line);
   background: #0d141b; transition: border-color .2s;
 }
-.cam.compact .frame { width: 150px; }
+.cam.compact { gap: 0; }
+.cam.compact .frame { width: 168px; box-shadow: var(--shadow-lg); }
+
+/* Fullscreen: the video fills the viewport, controls overlay on top. */
+.cam.fullscreen { position: absolute; inset: 0; display: block; gap: 0; }
+.cam.fullscreen .frame {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  aspect-ratio: auto; border-radius: 0; border-width: 5px;
+}
+.cam.fullscreen .panel {
+  position: absolute; left: 50%; bottom: 26px; transform: translateX(-50%);
+  z-index: 4; width: min(92vw, 380px); max-width: none;
+  padding: 14px 18px; border-radius: 16px;
+  background: rgba(13, 20, 27, 0.58); backdrop-filter: blur(8px);
+}
+.cam.fullscreen .dist { color: #fff; }
+.cam.fullscreen .target { color: #cfe0f0; }
+.cam.fullscreen .privacy { color: #cfe0f0; }
+.cam.fullscreen .hint { color: #fff; }
+.cam.fullscreen .hint.ok { color: #7ee0a0; }
+.cam.fullscreen .hint.lost { color: #ff8a8a; }
+.cam.fullscreen .uncal { color: #ffcf8a; }
+.cam.fullscreen .link { color: #9ec3ec; }
+.cam.fullscreen .calib-box { background: rgba(0, 0, 0, 0.3); border-color: rgba(255, 255, 255, 0.18); }
+.cam.fullscreen .calib-box p,
+.cam.fullscreen .calib-box label { color: #e6eef6; }
 .frame.ok { border-color: var(--ok); }
 .frame.seek { border-color: var(--warn-line); }
 .frame.lost { border-color: var(--bad); }
@@ -264,6 +395,7 @@ const eyeBoxes = computed(() => {
 }
 .eye-box.ok { color: var(--ok); }
 .eye-box.bad { color: var(--bad); }
+.eye-box.idle { color: rgba(255, 255, 255, 0.45); }
 .corner { position: absolute; width: 8px; height: 8px; border: 2px solid currentColor; }
 .corner.tl { top: -2px; left: -2px; border-right: none; border-bottom: none; border-radius: 6px 0 0 0; }
 .corner.tr { top: -2px; right: -2px; border-left: none; border-bottom: none; border-radius: 0 6px 0 0; }
@@ -276,6 +408,13 @@ const eyeBoxes = computed(() => {
 }
 .eye-box.ok .eye-label { background: var(--ok); }
 .eye-box.bad .eye-label { background: var(--bad); }
+.eye-box.idle .eye-label { background: rgba(0, 0, 0, 0.45); }
+.hand-box {
+  position: absolute; color: #36c5f0;
+  border: 1.5px dashed currentColor; border-radius: 8px;
+  transition: left .08s linear, top .08s linear, width .12s linear, height .12s linear;
+}
+.hand-box .eye-label { background: #1f8fb0; }
 .count {
   position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
   font-family: var(--sans); font-size: 3rem; font-weight: 800; color: #fff;

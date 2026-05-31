@@ -14,6 +14,9 @@ const MP_BUNDLE = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MP_VER
 const MP_WASM = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MP_VERSION}/wasm`
 const MP_MODEL =
   'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task'
+const MP_GESTURE_MODEL =
+  'https://storage.googleapis.com/mediapipe-models/gesture_recognizer/gesture_recognizer/float16/1/gesture_recognizer.task'
+const GESTURE_MIN_SCORE = 0.5 // confidence threshold for thumb up/down
 
 const LEFT_IRIS = 468
 const RIGHT_IRIS = 473
@@ -21,6 +24,7 @@ const IPD_MM = 63 // average adult inter-pupillary distance
 const DEFAULT_FOV_DEG = 60 // typical webcam horizontal FOV (fallback only)
 const EMA_ALPHA = 0.35 // distance smoothing
 const CENTER_TOL = 0.18 // normalized offset allowed from frame center
+const EYE_CLOSED_BLINK = 0.5 // blendshape score above which an eye counts as closed/covered
 
 const CALIB_KEY = 'vc_cam_focal' // stored as focalPx / videoWidth (resolution independent)
 
@@ -43,14 +47,28 @@ export function useFaceTracker() {
   const offsetX = ref(0) // normalized (-0.5..0.5), 0 = centered
   const offsetY = ref(0)
   const eyes = ref(null) // { l: {x,y}, r: {x,y}, ipd } normalized, original (unmirrored) coords
+  const gesture = ref(null) // 'thumb_up' | 'thumb_down' | null (raw, unfiltered)
+  const hand = ref(null) // 'left' | 'right' | null — which hand answers (user's real hand)
+  // Bounding boxes of every detected hand, normalized original (unmirrored)
+  // coords: [{ xMin, yMin, xMax, yMax, hand }]. Used to draw hand frames and to
+  // confirm a hand is physically over the eye that must be covered.
+  const handBoxes = ref([])
+  // Eyelid-blink blendshape scores (0..1). "Left"/"Right" follow the subject's
+  // own anatomy (ARKit convention), matching the LEFT_IRIS/RIGHT_IRIS landmarks.
+  // Covering an eye with the hand reads as closed because the open eye is hidden.
+  const blinkL = ref(0)
+  const blinkR = ref(0)
   const focalRatio = ref(storedFocalRatio())
 
   const focalCalibrated = computed(() => focalRatio.value !== null)
+  const eyeClosedL = computed(() => blinkL.value >= EYE_CLOSED_BLINK)
+  const eyeClosedR = computed(() => blinkR.value >= EYE_CLOSED_BLINK)
   const centered = computed(
     () => Math.abs(offsetX.value) <= CENTER_TOL && Math.abs(offsetY.value) <= CENTER_TOL,
   )
 
   const landmarker = shallowRef(null)
+  const gestureRecognizer = shallowRef(null)
   let stream = null
   let videoEl = null
   let rafId = null
@@ -58,18 +76,102 @@ export function useFaceTracker() {
   let running = false
   let lastIpdPx = 0
   let emaCm = null
+  let visionMod = null // cached @mediapipe/tasks-vision module
+  let fileset = null // cached wasm fileset (shared by both models)
+  let gesturesOn = false
+
+  async function loadVision() {
+    if (!visionMod) visionMod = await import(/* @vite-ignore */ MP_BUNDLE)
+    if (!fileset) fileset = await visionMod.FilesetResolver.forVisionTasks(MP_WASM)
+    return visionMod
+  }
 
   async function loadModel() {
     if (landmarker.value) return
-    const vision = await import(/* @vite-ignore */ MP_BUNDLE)
-    const fileset = await vision.FilesetResolver.forVisionTasks(MP_WASM)
+    const vision = await loadVision()
     landmarker.value = await vision.FaceLandmarker.createFromOptions(fileset, {
       baseOptions: { modelAssetPath: MP_MODEL, delegate: 'GPU' },
       runningMode: 'VIDEO',
       numFaces: 1,
-      outputFaceBlendshapes: false,
+      outputFaceBlendshapes: true, // needed for eyeBlinkLeft/Right (eye-cover check)
       outputFacialTransformationMatrixes: false,
     })
+  }
+
+  // Lazy-load the hand gesture model (separate CDN download) the first time
+  // an answer-by-gesture phase needs it.
+  async function enableGestures() {
+    if (!gestureRecognizer.value) {
+      const vision = await loadVision()
+      gestureRecognizer.value = await vision.GestureRecognizer.createFromOptions(fileset, {
+        baseOptions: { modelAssetPath: MP_GESTURE_MODEL, delegate: 'GPU' },
+        runningMode: 'VIDEO',
+        numHands: 2, // one hand can cover the eye while the other answers 👍/👎
+      })
+    }
+    gesturesOn = true
+  }
+
+  function disableGestures() {
+    gesturesOn = false
+    gesture.value = null
+    hand.value = null
+    handBoxes.value = []
+  }
+
+  // Translate MediaPipe handedness to the user's real hand. It labels assuming a
+  // selfie-mirrored input; we feed the raw (unmirrored) frame, so swap.
+  function realHand(handedArr) {
+    const h = handedArr && handedArr[0]
+    return h ? (h.categoryName === 'Right' ? 'left' : 'right') : null
+  }
+
+  function detectGesture(ts) {
+    if (!gesturesOn || !gestureRecognizer.value) return
+    try {
+      const res = gestureRecognizer.value.recognizeForVideo(videoEl, ts)
+      const lms = (res && res.landmarks) || []
+
+      // Bounding box + handedness for every detected hand.
+      const boxes = []
+      for (let i = 0; i < lms.length; i++) {
+        const pts = lms[i]
+        if (!pts || !pts.length) continue
+        let xMin = 1,
+          yMin = 1,
+          xMax = 0,
+          yMax = 0
+        for (const p of pts) {
+          if (p.x < xMin) xMin = p.x
+          if (p.x > xMax) xMax = p.x
+          if (p.y < yMin) yMin = p.y
+          if (p.y > yMax) yMax = p.y
+        }
+        boxes.push({ xMin, yMin, xMax, yMax, hand: realHand(res.handedness && res.handedness[i]) })
+      }
+      handBoxes.value = boxes
+
+      // Answer = first hand showing a thumb up/down.
+      const gs = (res && res.gestures) || []
+      let g = null
+      let gHand = null
+      for (let i = 0; i < gs.length; i++) {
+        const top = gs[i] && gs[i][0]
+        if (
+          top &&
+          top.score >= GESTURE_MIN_SCORE &&
+          (top.categoryName === 'Thumb_Up' || top.categoryName === 'Thumb_Down')
+        ) {
+          g = top.categoryName === 'Thumb_Up' ? 'thumb_up' : 'thumb_down'
+          gHand = boxes[i] ? boxes[i].hand : null
+          break
+        }
+      }
+      gesture.value = g
+      hand.value = g ? gHand : boxes[0] ? boxes[0].hand : null
+    } catch {
+      /* transient frame errors are ignored */
+    }
   }
 
   function estimateDistance(ipdPx, videoWidth) {
@@ -86,9 +188,19 @@ export function useFaceTracker() {
     if (!lm || !lm[RIGHT_IRIS]) {
       faceDetected.value = false
       eyes.value = null
+      blinkL.value = 0 // no face -> can't confirm a covered eye
+      blinkR.value = 0
       return
     }
     faceDetected.value = true
+
+    const bs = res.faceBlendshapes && res.faceBlendshapes[0]
+    if (bs && bs.categories) {
+      for (const c of bs.categories) {
+        if (c.categoryName === 'eyeBlinkLeft') blinkL.value = c.score
+        else if (c.categoryName === 'eyeBlinkRight') blinkR.value = c.score
+      }
+    }
     const l = lm[LEFT_IRIS]
     const r = lm[RIGHT_IRIS]
     lastIpdPx = dist2d(l, r, vw, vh)
@@ -120,6 +232,7 @@ export function useFaceTracker() {
     } catch {
       /* transient frame errors are ignored */
     }
+    detectGesture(ts)
     if (running) schedule()
   }
 
@@ -185,6 +298,12 @@ export function useFaceTracker() {
     faceDetected.value = false
     eyes.value = null
     distanceCm.value = null
+    gesture.value = null
+    hand.value = null
+    handBoxes.value = []
+    gesturesOn = false
+    blinkL.value = 0
+    blinkR.value = 0
     emaCm = null
     status.value = 'idle'
   }
@@ -215,11 +334,18 @@ export function useFaceTracker() {
     offsetX,
     offsetY,
     eyes,
+    gesture,
+    hand,
+    handBoxes,
+    eyeClosedL,
+    eyeClosedR,
     centered,
     focalCalibrated,
     CENTER_TOL,
     start,
     stop,
+    enableGestures,
+    disableGestures,
     calibrateAt,
     clearCalibration,
   }

@@ -1,7 +1,7 @@
 <script setup>
-import { ref, reactive, nextTick } from 'vue'
+import { ref, reactive, computed, nextTick } from 'vue'
 import { useI18n } from '../composables/useI18n.js'
-import { ISH_PLATES, drawPlate, buildOptions } from '../data/ishihara.js'
+import { ISH_PLATES, drawPlate } from '../data/ishihara.js'
 import ResultScreen from '../components/ResultScreen.vue'
 import TestGate from '../components/TestGate.vue'
 
@@ -11,23 +11,22 @@ const TARGET_CM = 75
 
 const idx = ref(0)
 const finished = ref(false)
-const options = ref([])
 const canvasEl = ref(null)
 const state = reactive({ correct: 0, answers: [] })
 
 const total = ISH_PLATES.length
+const plateNum = computed(() => ISH_PLATES[idx.value].num)
 
 async function renderPlate() {
   await nextTick()
   if (canvasEl.value) drawPlate(canvasEl.value, ISH_PLATES[idx.value])
-  options.value = buildOptions(ISH_PLATES[idx.value].num)
 }
 
-function answer(val) {
+// seen = the user can make out the figure on this plate (normal response).
+function respond(seen) {
   const plate = ISH_PLATES[idx.value]
-  const correct = val === plate.num
-  if (correct) state.correct++
-  state.answers.push({ num: plate.num, given: val, correct })
+  if (seen) state.correct++
+  state.answers.push({ num: plate.num, seen })
   if (idx.value < total - 1) {
     idx.value++
     renderPlate()
@@ -50,18 +49,20 @@ const pass = () => state.correct >= Math.ceil(total * 0.75)
   <section class="hero"><h1>{{ t('tests.ishihara.name') }}</h1></section>
 
   <div class="test-panel">
-    <TestGate v-if="!finished" :target-cm="TARGET_CM" @locked="renderPlate">
+    <TestGate
+      v-if="!finished"
+      :target-cm="TARGET_CM"
+      :question="t('ishQ')"
+      voice-mode="number"
+      :expected="plateNum"
+      @locked="renderPlate"
+      @answer="respond"
+    >
       <template #intro>{{ t('ishInstr') }}</template>
 
       <div class="progress">{{ t('plate') }} {{ idx + 1 }} {{ t('of') }} {{ total }}</div>
       <div class="plate-wrap">
         <canvas ref="canvasEl" class="plate"></canvas>
-      </div>
-      <div class="opt-grid">
-        <button v-for="o in options" :key="o" @click="answer(o)">{{ o }}</button>
-      </div>
-      <div class="btn-row">
-        <button class="btn btn-ghost" @click="answer(null)">{{ t('cantSee') }}</button>
       </div>
     </TestGate>
 
@@ -71,8 +72,8 @@ const pass = () => state.correct >= Math.ceil(total * 0.75)
       <div class="result-list">
         <div v-for="(a, i) in state.answers" :key="i">
           <span>{{ t('plate') }} {{ i + 1 }} — {{ a.num }}</span>
-          <span :style="{ color: a.correct ? 'var(--ok)' : 'var(--bad)' }">
-            {{ a.given ?? '—' }} {{ a.correct ? '✓' : '✕' }}
+          <span :style="{ color: a.seen ? 'var(--ok)' : 'var(--bad)' }">
+            {{ a.seen ? t('gSeen') : t('gUnseen') }} {{ a.seen ? '✓' : '✕' }}
           </span>
         </div>
       </div>

@@ -75,6 +75,16 @@ a { color: inherit; }
 .btn-ghost { background: var(--bg); color: var(--ink); border: 1px solid var(--line); }
 .btn-ghost:hover { background: var(--line); }
 .btn-row { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; margin-top: 22px; }
+.btn-yes { background: #e6f4ec; color: var(--ok); border: 2px solid var(--ok); }
+.btn-yes:hover { background: var(--ok); color: #fff; }
+.btn-no { background: #fdeceb; color: var(--bad); border: 2px solid var(--bad); }
+.btn-no:hover { background: var(--bad); color: #fff; }
+
+/* ---- gesture yes/no answering ---- */
+.yn-question { font-family: var(--sans); font-weight: 600; color: var(--ink); margin-top: 20px; font-size: 1rem; }
+.yn-row { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; margin-top: 14px; }
+.yn-row .btn { min-width: 150px; font-size: 1rem; padding: 14px 22px; }
+.yn-hint { font-family: var(--sans); font-size: .78rem; color: var(--ink-soft); margin-top: 12px; }
 
 /* ---- test panel ---- */
 .test-panel {

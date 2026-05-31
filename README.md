@@ -48,7 +48,8 @@ src/
 
 **Design decisions**
 
-- **Calibration:** for the Snellen test to be meaningful, the home page sets the px/mm scale using a bank card (ISO 7810, 85.6 mm) as reference and stores it in `localStorage`. Letter size is computed from visual angle (5 arc-minutes) so it scales correctly with calibration.
+- **Webcam positioning is mandatory:** every test runs behind the camera gate (`TestGate`), so there is no manual screen-distance setup on the home page. The camera is shown fullscreen while you position yourself, collapses to a small bottom-left picture-in-picture once you're in position, and returns to fullscreen if you leave position.
+- **Calibration:** letter size for Snellen is computed from visual angle (5 arc-minutes). The px/mm screen scale uses a sensible default (`useCalibration.js`); the webcam supplies the viewing distance.
 - **Hash history:** `createWebHashHistory` is used so static hosting (GitHub Pages) needs no server-side routing.
 - **Eager route import:** the app is small, so a single bundle is faster than lazy chunks; it also avoids the async-component + `<Transition>` race condition.
 - **Minimal dependencies:** the only runtime dependencies are `vue` and `vue-router`. MediaPipe is not part of the bundle — it is lazy-loaded from a CDN. Styling is plain scoped CSS.

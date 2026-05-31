@@ -1,7 +1,7 @@
 <script setup>
 import { ref, reactive, computed } from 'vue'
 import { useI18n } from '../composables/useI18n.js'
-import { randomLetter, buildLetterOptions } from '../data/snellen.js'
+import { randomLetter } from '../data/snellen.js'
 import ResultScreen from '../components/ResultScreen.vue'
 import TestGate from '../components/TestGate.vue'
 
@@ -14,7 +14,6 @@ const CO_LEVELS = [0.55, 0.42, 0.30, 0.22, 0.15, 0.10, 0.06, 0.035]
 const idx = ref(0)
 const finished = ref(false)
 const current = ref(randomLetter())
-const options = ref(buildLetterOptions(current.value))
 const state = reactive({ lastReadable: -1 })
 
 const total = CO_LEVELS.length
@@ -27,14 +26,17 @@ const letterColor = computed(() => {
 
 function nextLetter() {
   current.value = randomLetter()
-  options.value = buildLetterOptions(current.value)
 }
 
-function answer(val) {
-  if (val === current.value) state.lastReadable = idx.value
-  if (idx.value < total - 1) {
-    idx.value++
-    nextLetter()
+function respond(seen) {
+  if (seen) {
+    state.lastReadable = idx.value
+    if (idx.value < total - 1) {
+      idx.value++
+      nextLetter()
+    } else {
+      finished.value = true
+    }
   } else {
     finished.value = true
   }
@@ -56,18 +58,19 @@ const levelLabel = computed(() => (best.value < 0 ? '—' : `${best.value + 1}/$
   <section class="hero"><h1>{{ t('tests.contrast.name') }}</h1></section>
 
   <div class="test-panel">
-    <TestGate v-if="!finished" :target-cm="TARGET_CM">
+    <TestGate
+      v-if="!finished"
+      :target-cm="TARGET_CM"
+      :question="t('coQ')"
+      voice-mode="letter"
+      :expected="current"
+      @answer="respond"
+    >
       <template #intro>{{ t('coInstr') }}</template>
 
       <div class="progress">{{ t('level') }} {{ idx + 1 }} {{ t('of') }} {{ total }}</div>
       <div class="contrast-stage">
         <span class="co-letter" :style="{ color: letterColor }">{{ current }}</span>
-      </div>
-      <div class="opt-grid">
-        <button v-for="o in options" :key="o" @click="answer(o)">{{ o }}</button>
-      </div>
-      <div class="btn-row">
-        <button class="btn btn-ghost" @click="answer(null)">{{ t('cantSee') }}</button>
       </div>
     </TestGate>
 
