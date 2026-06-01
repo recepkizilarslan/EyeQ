@@ -1,5 +1,6 @@
 import { ref } from 'vue'
 import { useI18n } from './useI18n.js'
+import { capabilities } from './capabilities.js'
 
 // Voice layer built on the browser Web Speech API — no bundle/CDN cost.
 //   - speak(text): text-to-speech for spoken UI prompts (works almost everywhere)
@@ -10,9 +11,10 @@ import { useI18n } from './useI18n.js'
 
 const { lang } = useI18n()
 
-const SR = typeof window !== 'undefined' && (window.SpeechRecognition || window.webkitSpeechRecognition)
-const recognitionSupported = !!SR
-const ttsSupported = typeof window !== 'undefined' && 'speechSynthesis' in window
+// Feature detection lives in capabilities.js — these just read from it.
+const SR = capabilities.SpeechRecognition
+const recognitionSupported = capabilities.stt
+const ttsSupported = capabilities.tts
 
 const MUTE_KEY = 'vc_tts_muted'
 const muted = ref(localStorage.getItem(MUTE_KEY) === '1')
@@ -125,7 +127,7 @@ let audioCtx = null
 function beep(kind = 'ok') {
   if (muted.value) return
   try {
-    const AC = window.AudioContext || window.webkitAudioContext
+    const AC = capabilities.AudioContext
     if (!AC) return
     audioCtx = audioCtx || new AC()
     const ctx = audioCtx

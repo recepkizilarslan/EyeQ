@@ -1,4 +1,5 @@
 import { ref, computed, shallowRef } from 'vue'
+import { capabilities } from './capabilities.js'
 
 // Webcam-based head-distance + centering tracker.
 //
@@ -246,13 +247,12 @@ export function useFaceTracker() {
     videoEl = targetVideoEl
     status.value = 'loading'
     errorKind.value = null
-    if (!navigator.mediaDevices || !window.isSecureContext) {
-      // getUserMedia needs https or localhost
-      if (!navigator.mediaDevices) {
-        status.value = 'error'
-        errorKind.value = 'insecure'
-        return
-      }
+    // Static capability check (secure context + getUserMedia API) lives in
+    // capabilities.js; runtime permission / no-device errors are caught below.
+    if (!capabilities.secureContext || !capabilities.camera) {
+      status.value = 'error'
+      errorKind.value = capabilities.secureContext ? 'nocamera' : 'insecure'
+      return
     }
     try {
       stream = await navigator.mediaDevices.getUserMedia({

@@ -26,6 +26,8 @@ const props = defineProps({
 const emit = defineEmits(['locked', 'answer'])
 
 const { t } = useI18n()
+// Capability rejection is handled app-wide in App.vue (CompatibilityGate), so by
+// the time a test mounts the camera + voice are guaranteed available.
 const {
   speak,
   beep,
@@ -362,22 +364,11 @@ onUnmounted(() => {
 
         <div class="yn-question">{{ question }}</div>
 
-        <!-- Voice-only answering. Buttons remain ONLY as a fallback where the
-             browser has no speech recognition, so the test is never a dead end. -->
-        <template v-if="recognitionSupported">
-          <div class="yn-hint">🎤 {{ t('vHint') }}</div>
-        </template>
-        <template v-else>
-          <div class="yn-row">
-            <button class="btn btn-yes" :disabled="!answering" @click="answer(true)">
-              👍 {{ yesText }}
-            </button>
-            <button class="btn btn-no" :disabled="!answering" @click="answer(false)">
-              👎 {{ noText }}
-            </button>
-          </div>
-          <div class="yn-hint no-voice">{{ t('vNoVoice') }}</div>
-        </template>
+        <!-- Hands-free: voice is the only way to answer. The compatibility gate
+             above guarantees speech recognition exists, so there is no button
+             fallback. For yes/no tests we surface the two spoken options. -->
+        <div class="yn-hint">🎤 {{ t('vHint') }}</div>
+        <div v-if="voiceMode === 'yesno'" class="yn-options">{{ yesText }} · {{ noText }}</div>
       </div>
     </div>
 
@@ -505,13 +496,15 @@ onUnmounted(() => {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.no-voice {
-  color: #b06a00;
-}
 .tts-warn {
   font-size: 0.8rem;
   color: #b06a00;
   max-width: 240px;
+}
+.yn-options {
+  font-family: var(--sans);
+  font-size: 0.95rem;
+  color: #5a6b7b;
 }
 
 .cam-layer.fs {
