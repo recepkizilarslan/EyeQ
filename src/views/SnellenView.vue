@@ -76,7 +76,7 @@ const bothGood = computed(() => results.right >= 4 && results.left >= 4) // 6/12
 const anyMissing = computed(() => results.right < 0 || results.left < 0)
 const resultStatus = computed(() => (anyMissing.value ? 'warn' : bothGood.value ? 'ok' : 'neutral'))
 const resultBadge = computed(() =>
-  anyMissing.value ? t('ishWarn') : bothGood.value ? t('ishOk') : t('resultTitle'),
+  anyMissing.value ? t('snWarn') : bothGood.value ? t('snOk') : t('resultTitle'),
 )
 </script>
 
@@ -89,8 +89,8 @@ const resultBadge = computed(() =>
         :target-cm="TARGET_CM"
         :cover-eye="coverEye"
         :question="t('snQ')"
-        voice-mode="letter"
-        :expected="current"
+        :yes-label="t('gSeen')"
+        :no-label="t('cantSee')"
         @locked="measuredCm = $event || measuredCm"
         @answer="respond"
       >

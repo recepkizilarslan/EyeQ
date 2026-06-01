@@ -291,7 +291,13 @@ export function useFaceTracker() {
 
   function stop() {
     running = false
-    if (rafId != null && !useVFC) cancelAnimationFrame(rafId)
+    if (rafId != null) {
+      if (useVFC && videoEl && typeof videoEl.cancelVideoFrameCallback === 'function') {
+        videoEl.cancelVideoFrameCallback(rafId)
+      } else if (!useVFC) {
+        cancelAnimationFrame(rafId)
+      }
+    }
     rafId = null
     stopStream()
     if (videoEl) videoEl.srcObject = null
