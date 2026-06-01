@@ -66,7 +66,10 @@ const levelLabel = computed(() => (best.value < 0 ? '—' : `${best.value + 1}/$
       :no-label="t('cantSee')"
       @answer="respond"
     >
-      <template #intro>{{ t('coInstr') }}</template>
+      <template #intro>
+        <span>{{ t('coInstr') }}</span>
+        <span class="glasses-note">{{ t('glassesContrast') }}</span>
+      </template>
 
       <div class="progress">{{ t('level') }} {{ idx + 1 }} {{ t('of') }} {{ total }}</div>
       <div class="contrast-stage">

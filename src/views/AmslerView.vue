@@ -86,7 +86,10 @@ function eyeAnswer(eye) {
       @locked="drawGrid"
       @answer="respond"
     >
-      <template #intro>{{ t('amInstr') }}</template>
+      <template #intro>
+        <span>{{ t('amInstr') }}</span>
+        <span class="glasses-note">{{ t('glassesAmsler') }}</span>
+      </template>
 
       <div class="progress">
         {{ testEye === 'right' ? t('testingRightEye') : t('testingLeftEye') }}

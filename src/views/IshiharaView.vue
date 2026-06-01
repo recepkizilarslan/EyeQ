@@ -58,7 +58,10 @@ const pass = () => state.correct >= Math.ceil(total * 0.75)
       @locked="renderPlate"
       @answer="respond"
     >
-      <template #intro>{{ t('ishInstr') }}</template>
+      <template #intro>
+        <span>{{ t('ishInstr') }}</span>
+        <span class="glasses-note">{{ t('glassesIshihara') }}</span>
+      </template>
 
       <div class="progress">{{ t('plate') }} {{ idx + 1 }} {{ t('of') }} {{ total }}</div>
       <div class="plate-wrap">
