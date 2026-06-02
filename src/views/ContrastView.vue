@@ -62,11 +62,14 @@ const levelLabel = computed(() => (best.value < 0 ? '—' : `${best.value + 1}/$
       v-if="!finished"
       :target-cm="TARGET_CM"
       :question="t('coQ')"
-      voice-mode="letter"
-      :expected="current"
+      :yes-label="t('gSeen')"
+      :no-label="t('cantSee')"
       @answer="respond"
     >
-      <template #intro>{{ t('coInstr') }}</template>
+      <template #intro>
+        <span>{{ t('coInstr') }}</span>
+        <span class="glasses-note">{{ t('glassesContrast') }}</span>
+      </template>
 
       <div class="progress">{{ t('level') }} {{ idx + 1 }} {{ t('of') }} {{ total }}</div>
       <div class="contrast-stage">
@@ -74,7 +77,7 @@ const levelLabel = computed(() => (best.value < 0 ? '—' : `${best.value + 1}/$
       </div>
     </TestGate>
 
-    <ResultScreen v-else :status="good ? 'ok' : 'neutral'" :badge="good ? t('ishOk') : t('resultTitle')" @again="restart">
+    <ResultScreen v-else :status="good ? 'ok' : 'neutral'" :badge="good ? t('coOk') : t('coWarn')" @again="restart">
       <div class="result-detail">{{ t('coD') }} <b>{{ levelLabel }}</b></div>
       <div class="result-detail">{{ t('coNote') }}</div>
     </ResultScreen>

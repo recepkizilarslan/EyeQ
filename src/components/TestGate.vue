@@ -262,13 +262,27 @@ function speakPrompt() {
   speak(promptText.value)
 }
 
+let listenStartTimer = null
+
 watch(answering, (on) => {
   if (on) {
     resetVoiceDedup() // new window — accept the first answer immediately
-    if (recognitionSupported) startListening(handleHeard)
     speakPrompt()
-  } else if (recognitionSupported) {
-    stopListening()
+    // Delay STT start: wait for the TTS prompt to finish before listening,
+    // otherwise the mic picks up the spoken prompt as an answer.
+    if (recognitionSupported) {
+      if (listenStartTimer) clearTimeout(listenStartTimer)
+      listenStartTimer = setTimeout(() => {
+        if (answering.value) startListening(handleHeard)
+        listenStartTimer = null
+      }, 600)
+    }
+  } else {
+    if (listenStartTimer) {
+      clearTimeout(listenStartTimer)
+      listenStartTimer = null
+    }
+    if (recognitionSupported) stopListening()
   }
 })
 // Re-prompt aloud when the stimulus changes mid-test (next letter/plate).
@@ -278,7 +292,18 @@ watch(
   () => props.expected,
   () => {
     resetVoiceDedup()
-    if (answering.value) speakPrompt()
+    if (answering.value) {
+      stopListening()
+      speakPrompt()
+      // Restart listening after the prompt finishes
+      if (recognitionSupported) {
+        if (listenStartTimer) clearTimeout(listenStartTimer)
+        listenStartTimer = setTimeout(() => {
+          if (answering.value) startListening(handleHeard)
+          listenStartTimer = null
+        }, 600)
+      }
+    }
   },
 )
 watch(coverViolation, (v) => {
@@ -338,6 +363,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   stopListening()
+  if (listenStartTimer) clearTimeout(listenStartTimer)
   if (watchdog) clearInterval(watchdog)
 })
 </script>

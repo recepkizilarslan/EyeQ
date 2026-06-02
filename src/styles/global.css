@@ -111,6 +111,16 @@ a { color: inherit; }
 
 .app-footer { text-align: center; padding: 30px 20px; color: var(--ink-soft); font-family: var(--sans); font-size: .8rem; border-top: 1px solid var(--line); }
 
+/* ---- glasses / correction notice ---- */
+.glasses-note {
+  display: block;
+  margin-top: 10px;
+  font-family: var(--sans); font-size: .82rem; color: #7a5f1a;
+  background: #fdf6e3; border: 1px solid #e8d49a;
+  border-radius: 8px; padding: 8px 12px;
+  max-width: 52ch; text-align: left; line-height: 1.5;
+}
+
 /* ---- route transition ---- */
 .fade-enter-active, .fade-leave-active { transition: opacity .18s ease; }
 .fade-enter-from, .fade-leave-to { opacity: 0; }
